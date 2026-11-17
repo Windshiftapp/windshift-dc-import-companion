@@ -1,0 +1,76 @@
+name: Release
+
+# Build the companion JAR and publish it as a GitHub release asset. The website
+# links to a stable "latest release" URL, so publishing a tag is the only step
+# needed to make a new version downloadable.
+#
+# Release a new version:
+#   1. Bump <version> in pom.xml.
+#   2. Commit and tag it: git tag v<version> && git push origin v<version>.
+#
+# The tag must match the pom version; the workflow fails otherwise.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build and release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Read plugin version
+        id: version
+        run: |
+          set -euo pipefail
+          version="$(mvn -B -q help:evaluate -Dexpression=project.version -DforceStdout)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Plugin version: $version"
+
+      - name: Verify the tag matches the pom version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$tag" != "${{ steps.version.outputs.version }}" ]; then
+            echo "::error::tag v$tag does not match pom version ${{ steps.version.outputs.version }}"
+            exit 1
+          fi
+
+      - name: Build
+        run: mvn -B package
+
+      # A fixed asset name gives the website one stable URL:
+      #   .../releases/latest/download/dc-import-companion.jar
+      - name: Stage the stable asset name
+        run: cp "target/dc-import-companion-${{ steps.version.outputs.version }}.jar" dc-import-companion.jar
+
+      - name: Upload the build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dc-import-companion-${{ steps.version.outputs.version }}
+          path: |
+            dc-import-companion.jar
+            target/dc-import-companion-${{ steps.version.outputs.version }}.jar
+
+      - name: Publish the GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dc-import-companion.jar
+            target/dc-import-companion-${{ steps.version.outputs.version }}.jar
